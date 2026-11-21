@@ -40,9 +40,23 @@ Logs go to stderr (tool calls, API errors, approvals).
 
 Allowed users: DM the bot, mention it in a server, or write in a channel listed in `CHANNEL_IDS`. Conversation history is per channel, in memory (lost on restart), wiped after `HISTORY_IDLE_MINUTES` idle or by `!reset`. Long replies are split at 2000 chars.
 
+### Attachments
+
+Attach files to a message (text optional). Saved to `inbox/<channel_id>/` (gitignored), deleted when that channel's history is wiped (`!reset`, idle, size ceiling) and at bot startup. Max 25 MB each.
+
+| type | handling |
+|---|---|
+| .csv .tsv .txt .ofx .qfx .qif .json | text inlined (first 20000 chars if longer) |
+| .pdf | inlined if <= 20 MB |
+| .png .jpg .jpeg .gif .webp | inlined if <= 5 MB |
+| .xlsx .xls .ods | saved only; the bot reaches them via skill scripts (path as `run_script` arg) |
+| other / oversize | not saved; the bot is told and relays it |
+
+At most 20 MB of PDFs/images are inlined per message (in attachment order); later ones are saved only. Inlined PDFs and images stay in history (counted ~6400 chars per image, ~12000 per PDF page toward `HISTORY_MAX_CHARS`).
+
 ## Approval flow
 
-- Skill creation/update: the bot posts the proposal (SKILL.md and scripts as attachments; for updates, a unified diff) with Approve/Reject buttons. Files are written to `skills/<name>/` only on Approve. Updates overwrite only the files included; nothing is deleted.
+- Skill creation/update: the bot posts the proposal (SKILL.md and scripts as attachments; for updates, a unified diff) with Approve/Reject buttons. Files are written to `skills/<name>/` (gitignored: private, never committed or deployed) only on Approve. Updates overwrite only the files included; nothing is deleted.
 - Script runs: every `run_script` call is posted (skill/script, args) and needs Approve first.
 - Only `ALLOWED_USER_IDS` can click. No click for 10 minutes = rejected.
 - Scripts run via `SHEET_PYTHON`, cwd = repo root, 60 s timeout, with a minimal env (PATH, HOME, locale, `SPREADSHEET_PATH`, `SHEET_PYTHON`, `SHEET_CLI`); the Discord and Anthropic keys are not passed.

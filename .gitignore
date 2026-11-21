@@ -6,3 +6,6 @@ __pycache__/
 .venv/
 .sheetcli/
 HANDOFF.md
+inbox/
+skills/*
+!skills/.gitkeep

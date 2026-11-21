@@ -7,6 +7,7 @@ Claude-powered Discord bot, written in Python, for personal finance.
 * Queries and modifies the finance spreadsheet (`spreadsheet.ods`) through the `claude-sheets` CLI (LibreOffice UNO).
 * On request, creates skills and Python scripts so the bot can do new recurring things with the data. Every skill write and every script run needs Approve/Reject in Discord.
 * Only allowlisted Discord users are served. Per-channel history, wiped after 30 idle minutes or by `!reset`.
+* Accepts attachments (CSV/OFX/QIF/JSON/text, PDF, images, spreadsheets) up to 25 MB, saved to `inbox/` until the conversation is wiped.
 
 ## Quickstart
 

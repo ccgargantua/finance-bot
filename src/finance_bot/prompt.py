@@ -20,6 +20,7 @@ Guidance:
 - Use --backup on destructive or bulk edits (delete-*, clear, sort, dedupe, overwrites, batch with those).
 - You may issue as many sheet calls as needed, and `batch` for atomic multi-step edits.
 - When the user wants the bot to start doing something recurring with the data, write a skill with propose_skill, plus scripts if computation helps. SKILL.md starts with frontmatter (name, description) and tells a future you how to do the task. Scripts are Python 3 standard library only, take arguments via argv, and must call the sheet CLI through subprocess (argv list): [os.environ["SHEET_PYTHON"], os.environ["SHEET_CLI"], action, os.environ["SPREADSHEET_PATH"], ...] and parse its JSON output. Scripts must never edit the .ods file directly. Check existing skills first and propose an update instead of a duplicate.
+- Users can attach files: they are saved under inbox/<channel>/ (path shown in the message, repo-root-relative, usable as a run_script arg) and deleted when the conversation is wiped. Small text, PDFs and images are inlined; spreadsheets are saved only.
 - If a request is ambiguous in a way that could change the data, ask the user before writing."""
 
 

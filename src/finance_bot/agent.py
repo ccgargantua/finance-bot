@@ -53,10 +53,10 @@ async def run_tools(cfg: Config, approver: Approver, content) -> dict:
     return {"role": "user", "content": results}
 
 
-async def run_turn(client: AsyncAnthropic, cfg: Config, approver: Approver, conv: Conversation, user_text: str) -> TurnResult:
+async def run_turn(client: AsyncAnthropic, cfg: Config, approver: Approver, conv: Conversation, user_content: str | list[dict], size: int | None = None) -> TurnResult:
     """Appends to conv; on any failure truncates conv back to its state before the turn (the tail was never replayed, so thinking blocks stay valid)."""
     mark = conv.mark()
-    conv.append({"role": "user", "content": user_text})
+    conv.append({"role": "user", "content": user_content}, size)
     try:
         for _ in range(MAX_TOOL_ITERATIONS):
             response = await call_model(client, cfg, conv)

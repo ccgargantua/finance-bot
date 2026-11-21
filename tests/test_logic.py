@@ -5,6 +5,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from finance_bot import attachments as att
+from finance_bot import inbox
 from finance_bot.config import ConfigError, load_config, load_dotenv, parse_dotenv
 from finance_bot.conversation import Conversation, ConversationStore, SIZE_NOTICE
 from finance_bot.messaging import should_respond, split_message, strip_mention
@@ -140,6 +142,125 @@ class ConversationTests(unittest.TestCase):
         store.reset(1)
         self.assertIsNot(store.acquire(1, lambda: [])[0], a)
         self.assertIs(store.acquire(2, lambda: [])[0], b)
+
+
+class AttachmentTests(unittest.TestCase):
+    def test_classify_case_insensitive(self):
+        self.assertEqual([att.classify(n) for n in ("a.CSV", "b.Pdf", "c.JPEG", "d.xlsx", "e.exe", "f")], ["text", "pdf", "image", "spreadsheet", None, None])
+
+    def test_rejection(self):
+        self.assertIn("unsupported", att.rejection("a.exe", 1))
+        self.assertIn("25 MB", att.rejection("a.csv", 25 * att.MB + 1))
+        self.assertIsNone(att.rejection("a.csv", 25 * att.MB))
+
+    def test_sanitize(self):
+        self.assertEqual(att.sanitize_filename("../../etc/pa ss\\wd.csv"), "wd.csv")
+        self.assertEqual(att.sanitize_filename("my stmt (1).csv"), "my_stmt__1_.csv")
+        self.assertEqual(att.sanitize_filename("..."), "file")
+        self.assertEqual(att.sanitize_filename(".hidden"), "hidden")
+
+    def test_unique_name(self):
+        self.assertEqual(att.unique_name("a.csv", set()), "a.csv")
+        self.assertEqual(att.unique_name("a.csv", {"a.csv", "a-1.csv"}), "a-2.csv")
+
+    def test_text_inline_and_truncation(self):
+        parts = att.saved_parts("a.csv", "inbox/1/a.csv", "text", b"x,y\n1,2")
+        self.assertEqual(parts[0][0]["text"], "Attachment: a.csv saved at inbox/1/a.csv (7 B, text, inlined)")
+        self.assertIn("x,y\n1,2", parts[1][0]["text"])
+        big = att.saved_parts("a.txt", "inbox/1/a.txt", "text", b"z" * 20001)
+        self.assertIn("truncated", big[0][0]["text"])
+        self.assertIn("first 20000 of 20001", big[1][0]["text"])
+        self.assertEqual(big[1][0]["text"].count("z"), 20000)
+
+    def test_text_invalid_utf8_and_empty(self):
+        parts = att.saved_parts("a.txt", "p", "text", b"\xff")
+        self.assertIn("\ufffd", parts[1][0]["text"])
+        self.assertEqual(att.saved_parts("a.txt", "p", "text", b"")[1][0]["text"], "(empty file)")
+
+    def test_image_inline_and_oversize(self):
+        parts = att.saved_parts("a.JPG", "p", "image", b"abc")
+        block, est = parts[1]
+        self.assertEqual(block["source"]["media_type"], "image/jpeg")
+        self.assertEqual(block["source"]["data"], "YWJj")
+        self.assertEqual(est, att.IMAGE_EST_CHARS)
+        self.assertEqual(len(att.saved_parts("a.png", "p", "image", b"x" * (att.MAX_IMAGE_INLINE_BYTES + 1))), 1)
+
+    def test_message_inline_budget(self):
+        data = b"x" * (3 * att.MB)
+        self.assertEqual(len(att.saved_parts("a.pdf", "p", "pdf", data, budget=3 * att.MB)), 2)
+        over = att.saved_parts("a.pdf", "p", "pdf", data, budget=3 * att.MB - 1)
+        self.assertEqual(len(over), 1)
+        self.assertIn("saved only (message inline limit reached)", over[0][0]["text"])
+        self.assertTrue(att.binary_inlined(att.saved_parts("a.png", "p", "image", b"x")))
+        self.assertFalse(att.binary_inlined(att.saved_parts("a.csv", "p", "text", b"x", budget=0)))
+        self.assertEqual(len(att.saved_parts("a.csv", "p", "text", b"x", budget=0)), 2)
+
+    def test_pdf_pages_and_inline_limit(self):
+        data = b"/Type /Pages /Type/Page> /Type /Page\n/Contents"
+        self.assertEqual(att.pdf_pages(data), 2)
+        self.assertEqual(att.pdf_pages(b"nothing"), 1)
+        block, est = att.saved_parts("a.pdf", "p", "pdf", data)[1]
+        self.assertEqual((block["type"], est), ("document", 2 * att.PDF_PAGE_EST_CHARS))
+        self.assertEqual(len(att.saved_parts("a.pdf", "p", "pdf", b"x" * (att.MAX_PDF_INLINE_BYTES + 1))), 1)
+
+    def test_spreadsheet_save_only_and_rejected_note(self):
+        parts = att.saved_parts("a.ods", "p", "spreadsheet", b"1")
+        self.assertEqual(len(parts), 1)
+        self.assertIn("saved only", parts[0][0]["text"])
+        self.assertIn("not saved: nope", att.rejected_parts("a.exe", "nope")[0][0]["text"])
+
+    def test_build_turn_empty_text_and_size_excludes_base64(self):
+        parts = att.saved_parts("a.png", "p", "image", b"x" * 100000)
+        turn = att.build_turn("", parts)
+        self.assertEqual(turn.blocks[0], {"type": "text", "text": att.NO_TEXT_PLACEHOLDER})
+        self.assertEqual(turn.size_chars, len(att.NO_TEXT_PLACEHOLDER) + len(parts[0][0]["text"]) + att.IMAGE_EST_CHARS)
+        self.assertEqual({k for b in turn.blocks for k in b}, {"type", "text", "source"})
+
+    def test_size_override_prevents_base64_wipe(self):
+        store = ConversationStore(1800, 10**6, clock=lambda: 0.0)
+        conv, _ = store.acquire(1, lambda: [])
+        turn = att.build_turn("hi", att.saved_parts("a.png", "p", "image", b"x" * 4 * att.MB))
+        conv.append({"role": "user", "content": turn.blocks}, turn.size_chars)
+        self.assertLess(conv.size_chars(), 10**5)
+        self.assertIs(store.acquire(1, lambda: [])[0], conv)
+
+
+class InboxTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_save_relative_path_and_collision(self):
+        self.assertEqual(inbox.save(self.root, 7, "../a b.csv", b"1"), "inbox/7/a_b.csv")
+        self.assertEqual(inbox.save(self.root, 7, "a b.csv", b"2"), "inbox/7/a_b-1.csv")
+        self.assertEqual((self.root / "inbox/7/a_b.csv").read_bytes(), b"1")
+
+    def test_wipe_hooks(self):
+        wiped = []
+        store = ConversationStore(100, 10, clock=lambda: now[0], on_wipe=wiped.append)
+        now = [0.0]
+        c, _ = store.acquire(1, lambda: [])
+        self.assertEqual(wiped, [])
+        c.append({"role": "user", "content": "x" * 11})
+        store.acquire(1, lambda: [])
+        self.assertEqual(wiped, [1])
+        now[0] = 500
+        store.acquire(1, lambda: [])
+        self.assertEqual(wiped, [1, 1])
+        store.reset(1)
+        self.assertEqual(wiped, [1, 1, 1])
+
+    def test_wipe_channel_and_all(self):
+        inbox.save(self.root, 1, "a.csv", b"1")
+        inbox.save(self.root, 2, "a.csv", b"1")
+        inbox.wipe_channel(self.root, 1)
+        self.assertFalse((self.root / "inbox/1").exists())
+        self.assertTrue((self.root / "inbox/2/a.csv").exists())
+        inbox.wipe_all(self.root)
+        self.assertFalse((self.root / "inbox").exists())
 
 
 class MessagingTests(unittest.TestCase):
@@ -359,6 +480,14 @@ class AgentLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([r["tool_use_id"] for r in results], ["a", "b"])
         self.assertNotIn("is_error", results[0])
         self.assertTrue(results[1]["is_error"])
+
+    async def test_block_content_with_size_override(self):
+        turn = att.build_turn("", att.saved_parts("a.png", "p", "image", b"x" * 1000))
+        conv = Conversation([])
+        result = await agent.run_turn(FakeClient([end("ok")]), self.cfg, self.approver, conv, turn.blocks, turn.size_chars)
+        self.assertTrue(result.ok)
+        self.assertEqual(conv.messages[0]["content"], turn.blocks)
+        self.assertEqual(conv._sizes[0], turn.size_chars)
 
     async def test_second_turn_extends_without_editing(self):
         _, conv = await self.run_turn([tool_use("t1"), end("one")])
