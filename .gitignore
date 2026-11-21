@@ -1,0 +1,8 @@
+spreadsheet.ods
+*.bak-*
+.env
+__pycache__/
+*.pyc
+.venv/
+.sheetcli/
+HANDOFF.md

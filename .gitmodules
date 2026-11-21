@@ -1,0 +1,3 @@
+[submodule "claude-sheets"]
+	path = claude-sheets
+	url = https://github.com/ccgargantua/claude-sheets
